@@ -42,7 +42,75 @@ library BLS2 {
     uint128 private constant P_PLUS_ONE_SLASH_2_HI = 0x0680447a8e5ff9a692c6e9ed90d2eb35;
     uint256 private constant P_PLUS_ONE_SLASH_2_LO = 0xd91dd2e13ce144afd9cc34a83dac3d8907aaffffac54ffffee7fbfffffffeaab;
 
+    enum HashFunction {
+        SHA256,
+        KECCAK256
+        // BLAKE2B // is not supported yet
+    }
+
     error InvalidDSTLength(bytes dst);
+    error UnsupportedHashFunction(bytes dst);
+    error InvalidDSTFormat(bytes dst);
+
+    /// @notice Parse hash function identifier from DST string
+    /// @param dst Domain separation tag containing hash function identifier
+    /// @return HashFunction enum value
+    function _parseHashFunction(bytes memory dst) internal pure returns (HashFunction) {
+        bytes memory sha256Pattern = bytes("XMD:SHA-256");
+        bytes memory keccak256Pattern = bytes("XMD:KECCAK-256");
+        //bytes memory blake2bPattern = bytes("XMD:BLAKE2B");
+
+        // Search for hash function patterns in DST
+        if (_containsPattern(dst, sha256Pattern)) {
+            return HashFunction.SHA256;
+        }
+        if (_containsPattern(dst, keccak256Pattern)) {
+            return HashFunction.KECCAK256;
+        }
+        // if (_containsPattern(dst, blake2bPattern)) {
+        //     return HashFunction.BLAKE2B;
+        // }
+
+        revert UnsupportedHashFunction(dst);
+    }
+
+    /// @notice Helper function to check if bytes contains a pattern
+    /// @param data The bytes to search in
+    /// @param pattern The pattern to search for
+    /// @return bool True if pattern is found
+    function _containsPattern(bytes memory data, bytes memory pattern) internal pure returns (bool) {
+        if (pattern.length == 0 || data.length < pattern.length) {
+            return false;
+        }
+
+        for (uint256 i = 0; i <= data.length - pattern.length; i++) {
+            bool found = true;
+            for (uint256 j = 0; j < pattern.length; j++) {
+                if (data[i + j] != pattern[j]) {
+                    found = false;
+                    break;
+                }
+            }
+            if (found) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// @notice Helper function to compute hash based on hash function type
+    /// @param data The data to hash
+    /// @param hashFn The hash function to use
+    /// @return result The 32-byte hash result
+    function _hash(bytes memory data, HashFunction hashFn) internal view returns (bytes32 result) {
+        if (hashFn == HashFunction.SHA256) {
+            return sha256(data);
+        } else if (hashFn == HashFunction.KECCAK256) {
+            return keccak256(data);
+        }
+        // TODO: BLAKE2B support requires proper EIP-152 precompile implementation with padding
+        // See: https://github.com/axic/blake2-solidity for reference implementation
+    }
 
     /// @notice Unmarshals a point on G1 from bytes in an uncompressed form.
     function g1Unmarshal(bytes memory m) internal pure returns (PointG1 memory) {
@@ -283,21 +351,36 @@ library BLS2 {
     }
 
     /// @notice Expand arbitrary message to n bytes, as described
-    ///     in rfc9380 section 5.3.1, using H = sha256.
+    ///     in rfc9380 section 5.3.1, with hash function determined by DST.
     /// @param DST Domain separation tag
     /// @param message The message to expand
     /// @param n_bytes The number of bytes to extend to
-    function expandMsg(bytes memory DST, bytes memory message, uint8 n_bytes) internal pure returns (bytes memory) {
+    function expandMsg(bytes memory DST, bytes memory message, uint8 n_bytes) internal view returns (bytes memory) {
+        HashFunction hashFn = _parseHashFunction(DST);
+        return _expandMsg(DST, message, n_bytes, hashFn);
+    }
+
+    /// @notice Internal expand message function with explicit hash function parameter
+    /// @param DST Domain separation tag
+    /// @param message The message to expand
+    /// @param n_bytes The number of bytes to extend to
+    /// @param hashFn The hash function to use
+    function _expandMsg(bytes memory DST, bytes memory message, uint8 n_bytes, HashFunction hashFn)
+        internal
+        view
+        returns (bytes memory)
+    {
         uint256 domainLen = DST.length;
         if (domainLen > 255) {
             revert InvalidDSTLength(DST);
         }
         bytes memory zpad = new bytes(64);
         bytes memory b_0 = abi.encodePacked(zpad, message, uint8(0), n_bytes, uint8(0), DST, uint8(domainLen));
-        bytes32 b0 = sha256(b_0);
+        bytes32 b0 = _hash(b_0, hashFn);
 
         bytes memory b_i = abi.encodePacked(b0, uint8(1), DST, uint8(domainLen));
-        bytes32 bi = sha256(b_i);
+        bytes32 bi = _hash(b_i, hashFn);
+
         bytes memory out = new bytes(n_bytes);
         uint256 ell = (n_bytes + uint256(31)) >> 5;
         for (uint256 i = 1; i < ell; i++) {
@@ -307,7 +390,7 @@ library BLS2 {
                 p := add(p, mul(32, sub(i, 1)))
                 mstore(p, bi)
             }
-            bi = sha256(b_i);
+            bi = _hash(b_i, hashFn);
         }
         assembly {
             let p := add(32, out)

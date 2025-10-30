@@ -13,6 +13,10 @@ uint256 constant ECMUL_ADDRESS = 7;
 // @notice address of the EIP-197 BN254 pairing check
 uint256 constant BN254_ECPAIRING_ADDRESS = 8;
 
+// TODO: BLAKE2B support - requires proper implementation with padding
+// @notice address of the EIP-152 BLAKE2B precompile
+// uint256 constant BLAKE2B_ADDRESS = 0x09;
+
 // @notice address of the EIP-2537 BLS12-381 point addition precompile
 uint256 constant BLS12_G1ADD = 0x0b;
 
